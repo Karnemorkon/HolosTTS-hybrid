@@ -1,0 +1,35 @@
+services:
+  holos-hybrid:
+    build: .
+    image: holos-hybrid:latest
+    container_name: holos-hybrid
+    ports:
+      - "8002:8002"
+    environment:
+      - HF_HOME=/app/models
+    # Ручний вибір потоків CPU (інакше авто: 80% від потоків хоста):
+    #   - TTS_THREADS=6
+    volumes:
+      - holos_models_cache:/app/models
+    deploy:
+      resources:
+        limits:
+          cpus: "12.0"
+          memory: 8g
+    memswap_limit: 8g
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/healthz', timeout=4)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 600s
+    restart: unless-stopped
+
+volumes:
+  holos_models_cache:
+    name: holos_models_cache
