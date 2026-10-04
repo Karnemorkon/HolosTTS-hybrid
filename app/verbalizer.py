@@ -9,7 +9,7 @@ https://huggingface.co/spaces/patriotyk/styletts2-ukrainian (verbalizer.py).
 (автор викликав по одному реченню - повільніше).
 
 Модель (~1.9 ГБ) завантажується ліниво при першому виклику у спільний
-volume HF_HOME (holos_models_cache) - качається рівно один раз на обидва сервіси.
+volume HF_HOME (holos_models_cache) - качається рівно один раз.
 """
 import re
 import threading

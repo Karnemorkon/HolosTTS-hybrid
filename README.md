@@ -1,5 +1,17 @@
 # HolosTTS-hybrid
 
+[![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/banner-direct-single.svg)](https://stand-with-ukraine.pp.ua)
+[![Made in Ukraine](https://img.shields.io/badge/made_in-Ukraine-ffd700.svg?labelColor=0057b7)](https://stand-with-ukraine.pp.ua)
+[![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
+[![Russian Warship Go Fuck Yourself](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/RussianWarship.svg)](https://stand-with-ukraine.pp.ua)
+
+---
+
+> ⚠️ **Відмова від відповідальності / Disclaimer**
+>
+> * **UA:** Цей проєкт є незалежною аматорською розробкою (Docker-обгорткою) і **не є офіційним продуктом** автора оригінальної нейромережі. Він жодним чином не афілійований, не спонсорується і не підтримується розробником [patriotyk](https://github.com/patriotyk). Усі права на оригінальні моделі, ваги та препроцес належать їхньому законному автору. Проєкт надається "як є" (as is), автор цієї обгортки не несе відповідальності за можливі збої чи використання сервісу.
+> * **EN:** This project is an independent, community-driven Docker wrapper and **is not an official product** of the original neural network creator. It is not affiliated with, endorsed, or sponsored by [patriotyk](https://github.com/patriotyk). All rights to the original models and weights belong to their respective owner. The software is provided "as is", without warranty of any kind.
+
 > **English summary:** production-ready Dockerized **Ukrainian text-to-speech** service
 > (REST API + Web UI, port 8002). It runs the [HolosTTS](https://github.com/patriotyk/HolosTTS)
 > neural network with a **PyTorch voice encoder + INT8 ONNX generator** on CPU via
@@ -12,7 +24,7 @@
 
 ## Можливості
 
-- **Синтез українською** 24 кГц з 28 пресетами голосів + клонування голосу з аудіо-промпта
+- **Синтез українською** 24 кГц з 27 пресетами голосів + клонування голосу з аудіо-промпта
 - **INT8 ONNX-генератор** (`holos_cpu_int8.onnx`) на ONNX Runtime — швидше за fp32 на CPU
 - **Автовербалізація**: `250 грн`, `22.08.2025 о 15:30` → «двісті пʼятдесят гривень…»
   (M2M100-CTranslate2, ліниве завантаження ~1.9 ГБ один раз на volume)
@@ -23,7 +35,7 @@
 ## Швидкий старт
 
 ```bash
-git clone <this-repo-url>
+git clone https://github.com/Karnemorkon/HolosTTS-hybrid.git
 cd HolosTTS-hybrid
 docker compose up -d --build
 # перший запуск: довантаження моделей у volume (кілька хвилин), потім:
@@ -31,7 +43,45 @@ curl http://localhost:8002/healthz
 # Web UI: http://localhost:8002/
 ```
 
-Ознака готовності: `{status:ok,engine:hybrid-onnx-int8,...,threads:12}`.
+Ознака готовності: `{"status":"ok","engine":"hybrid-onnx-int8",...,"threads":12}`.
+
+## Розгортання через Docker Hub
+
+Образ: [`morkon06/holostts-hybrid`](https://hub.docker.com/r/morkon06/holostts-hybrid).
+
+```bash
+docker pull morkon06/holostts-hybrid:main
+
+docker run -d --name holos-tts \
+  -p 8002:8002 \
+  -v holos_models_cache:/app/models \
+  --restart unless-stopped \
+  morkon06/holostts-hybrid:main
+```
+
+Теги: `main` — останній збір із гілки `main`; `latest` та версійні (`1.0.0`) — із git-тегів (`v1.0.0`).
+
+Compose без збірки (замість `build: .`):
+
+```yaml
+services:
+  holos-hybrid:
+    image: morkon06/holostts-hybrid:main
+    container_name: holos-hybrid
+    ports:
+      - "8002:8002"
+    environment:
+      - HF_HOME=/app/models
+    volumes:
+      - holos_models_cache:/app/models
+    restart: unless-stopped
+
+volumes:
+  holos_models_cache:
+```
+
+Ліміти CPU/RAM, healthcheck і ротацію логів — копіюйте із `docker-compose.yml` репозиторію.
+
 
 ## API
 
@@ -68,6 +118,27 @@ curl -s http://localhost:8002/api/verbalize \
 curl -s http://localhost:8002/api/voices      # {"voices":["Speaker_84",...]}
 curl -s http://localhost:8002/healthz         # статус, провайдер, потоки
 ```
+### `POST /v1/audio/speech` (OpenAI-сумісний)
+
+Формат [OpenAI Audio Speech API](https://platform.openai.com/docs/api-reference/audio/createSpeech) — працює з будь-яким клієнтом, що вміє підмінювати `base_url` (SillyTavern, OpenWebUI, LibreChat, HA-плагіни тощо):
+
+| Поле | Опис |
+|---|---|
+| `input` | текст (автовербалізація цифр) |
+| `voice` | пресет (`Speaker_84`) або імена OpenAI (`alloy`, `nova`, …) |
+| `response_format` | `wav`, `pcm`, `mp3` (типово `mp3`) |
+| `speed` | 0.25–4.0 (типово 1.0) |
+| `stream` | `true` → потокова відповідь (частини по мірі генерації) |
+
+```bash
+curl http://localhost:8002/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"input":"Привіт! Це український TTS.","voice":"Speaker_84","response_format":"wav"}' \
+  --output speech.wav
+```
+
+Автентифікація не потрібна; поле `model` приймається і ігнорується.
+
 
 ## Конфігурація
 
@@ -77,7 +148,7 @@ curl -s http://localhost:8002/healthz         # статус, провайдер
 | `ORT_INTRA_THREADS` | `min(TTS_THREADS, 9)` | ONNX Runtime intra-op |
 | `HF_HOME` | `/app/models` | кеш моделей (volume `holos_models_cache`) |
 
-Приклади — у [`.env.example`](.env.example). Ліміти контейнера (`cpus: 12.0`,
+Приклади — у [`.env.example`](.env.example). Ліміти контейнера (`cpus: "12.0"`,
 `memory: 8g`) задані у `docker-compose.yml` — під ваш хост правте їх разом із
 `TTS_THREADS` (типово quota = авто-значення `TTS_THREADS`).
 
@@ -94,20 +165,20 @@ curl -s http://localhost:8002/healthz         # статус, провайдер
 Оптимізації, зроблені в цьому репозиторії (виміряно на Xeon E5-2650, 12 потоків):
 
 - `intra_op_num_threads = min(TTS_THREADS, 9)` — виміряно як найшвидше
-- `session.run([audio], ...)` — відкидання зайвого виходу `audio_lengths`
+- `session.run(["audio"], ...)` — відкидання зайвого виходу `audio_lengths`
 - `lru_cache` на препроцесі частин + **prefetch** підготовки частини `i+1` під час генерації частини `i`
 - послідовна обробка частин (запити обслуговуються по черзі)
 
-## Бенчмарки (той самий хост, теплий A/B почерзі)
+## Бенчмарки (Xeon E5-2650, 12 потоків, теплий стан)
 
 | Сценарій | Час |
 |---|---|
-| Одне речення (середнє з 3) | **~3.9 с** |
-| 3 довгі речення (3 частини) | **~9.7 с** |
+| Одне речення (теплий замір) | **1.3–1.9 с** |
+| 3 довгі речення (3 частини) | **~8.4 с** |
 | Перший запуск (завантаження моделей) | до ~10 хв (volume cache) |
 
-Для порівняння: чистий PyTorch-бекенд (official HolosTTS) на тому ж хості давав
-5.3 с / 15.0 с на тих самих текстах — гібридний INT8-ONNX-шлях швидший на 27–35%.
+Для порівняння: у парних A/B-замірах чистий PyTorch-бекенд (official HolosTTS)
+на тих самих текстах давав 5.3 с / 15.0 с — гібридний INT8-ONNX-шлях швидший на 27–35%.
 
 ## Розробка і тестування
 
@@ -116,6 +187,29 @@ python -m py_compile app/*.py          # синтаксис (те саме ро�
 docker compose up -d --build           # збірка + запуск
 docker compose logs -f holos-hybrid     # логи (перший запуск качає моделі)
 ```
+## Home Assistant
+
+Сервіс — звичайний HTTP-сервер, тому його можна підʼєднати до Home Assistant кількома шляхами:
+
+| Шлях | Що дає |
+|---|---|
+| **Wyoming-адаптер** (рекомендовано) | міст Wyoming-протокол → `/api/synthesize`; HA (з 2023.5) має вбудовану TTS-платформу Wyoming з Assist-pipeline |
+| Кастомна TTS-інтеграція (`custom_components`) | прямий виклик REST API, повний контроль над entity |
+| `rest_command` в automations | прості оголошення без TTS-entity |
+
+Деякі HA-плагіни, що працюють з OpenAI TTS API, підключаться безпосередньо до `/v1/audio/speech`.
+
+Приклад `rest_command` у `configuration.yaml`:
+
+```yaml
+rest_command:
+  holos_tts:
+    url: "http://localhost:8002/api/synthesize"
+    method: POST
+    content_type: "application/json"
+    payload: '{"text": "{{ message }}", "auto_verbalize": true}'
+```
+
 
 ## Ліцензія та подяки
 

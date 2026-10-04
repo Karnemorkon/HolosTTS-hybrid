@@ -63,8 +63,8 @@ def _ensure_vocab():
     """
     Словник токенізації живе всередині holos.pt (ключ 'vocab') і є звичайним
     списком символів. Один раз витягуємо його у vocab.json, щоб далі не
-    вантажити 542-мб holos.pt взагалі: файл потрібен лише official-варіанту,
-    і лежить у тому самому спільному volume - качається рівно один раз.
+    вантажити 542-мб holos.pt взагалі: holos.pt потрібен лише для видобутку
+    словника - качається рівно один раз у спільний volume.
     """
     vocab_path = os.path.join(MODELS_DIR, "vocab.json")
     if os.path.isfile(vocab_path):
@@ -264,7 +264,7 @@ def _prepare_part(part):
     return ipa(_stressify(part))
 
 
-def _generate_part(phonemes, voice_arr):
+def _generate_part(phonemes, voice_arr, speed=1.0):
     """Одна частина: масиви numpy -> onnxruntime -> float32 wav."""
     # --- МІСЦЕ ЗШИВАННЯ -------------------------------------------------
     # Вектор ембеддінгу, отриманий офіційним ПайТорч-енкодером (VoiceEncoder),
@@ -272,7 +272,9 @@ def _generate_part(phonemes, voice_arr):
     # Текстова частина: фонеми -> токені -> int64 нода 'tokens'.
     # --------------------------------------------------------------------
     feeds = {
-        name: np.asarray([value], dtype=np.float32)
+        name: np.asarray(
+            [speed if name.lower() == "speed" else value], dtype=np.float32
+        )
         for name, value in INPUT_BINDING.get("controls", {}).items()
     }
     if "phonemes" in INPUT_BINDING:
@@ -289,20 +291,23 @@ def _generate_part(phonemes, voice_arr):
     return np.asarray(outputs[0], dtype=np.float32).reshape(-1)
 
 
-def synthesize(text, voice):
-    """
-    Синтез мови.
-      voice: str (пресет), np.ndarray або torch.Tensor (клонований ембеддінг).
-      Повертає (SAMPLE_RATE, int16 numpy).
-    """
+def _validate_text(text):
     if len(text.strip()) < 10:
         raise ValueError("Текст закороткий (мінімум 10 символів)")
     if len(text) > 50000:
         raise ValueError("Текст мусить бути менше 50k символів")
 
+
+def synthesize_stream(text, voice, speed=1.0):
+    """Генератор синтезу: yield частини хвилі (float32) по мірі генерації.
+
+    Використовується для потокового /v1/audio/speech. Блокування утримується
+    на весь час ітерації - запити обслуговуються по черзі.
+      voice: str (пресет), np.ndarray або torch.Tensor (клонований ембеддінг).
+    """
+    _validate_text(text)
     voice_arr = _resolve_voice(voice)
     parts = list(split_to_parts(text))
-    chunks = []
     with _INFER_LOCK:
         if parts:
             # препроцес частини i+1 йде паралельно з генерацією частини i
@@ -314,8 +319,28 @@ def synthesize(text, voice):
                     if i + 1 < len(parts):
                         pending = pool.submit(_prepare_part, parts[i + 1])
                     if phonemes:
-                        chunks.append(_generate_part(phonemes, voice_arr))
+                        yield _generate_part(phonemes, voice_arr, speed)
 
+
+def float_to_pcm16(chunk):
+    """float32 частини -> int16 (для потокової відповіді).
+
+    Глобальну пікову нормалізацію у стрімінгу застосувати неможливо,
+    тому частина лише відтинається, якщо вийшла за межі [-1, 1].
+    """
+    peak = np.abs(chunk).max()
+    if peak > 1.0:
+        chunk = chunk / peak
+    return np.clip(chunk * 32767, -32768, 32767).astype(np.int16)
+
+
+def synthesize(text, voice, speed=1.0):
+    """
+    Синтез мови цілком.
+      voice: str (пресет), np.ndarray або torch.Tensor (клонований ембеддінг).
+      Повертає (SAMPLE_RATE, int16 numpy).
+    """
+    chunks = list(synthesize_stream(text, voice, speed))
     if not chunks:
         raise ValueError("Не вдалося отримати фонеми з тексту")
 

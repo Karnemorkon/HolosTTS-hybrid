@@ -5,10 +5,14 @@ from app import tts_pipeline as pipe
 from app import verbalizer
 
 
+DISCLAIMER_MD = '---\n\n> ⚠️ **Відмова від відповідальності / Disclaimer**\n>\n> * **UA:** Цей проєкт є незалежною аматорською розробкою (Docker-обгорткою) і **не є офіційним продуктом** автора оригінальної нейромережі. Він жодним чином не афілійований, не спонсорується і не підтримується розробником [patriotyk](https://github.com/patriotyk). Усі права на оригінальні моделі, ваги та препроцес належать їхньому законному автору. Проєкт надається "як є" (as is), автор цієї обгортки не несе відповідальності за можливі збої чи використання сервісу.\n> * **EN:** This project is an independent, community-driven Docker wrapper and **is not an official product** of the original neural network creator. It is not affiliated with, endorsed, or sponsored by [patriotyk](https://github.com/patriotyk). All rights to the original models and weights belong to their respective owner. The software is provided "as is", without warranty of any kind.'
+
+
 def create_demo():
     voices = pipe.list_voices()
     with gr.Blocks(title="HolosTTS hybrid (ONNX INT8 CPU)") as demo:
         gr.Markdown("# HolosTTS - український TTS (hybrid: ONNX Runtime INT8 + PyTorch-енкодер)")
+        gr.Markdown(DISCLAIMER_MD)
 
         custom_voice = gr.State(None)
 
