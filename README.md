@@ -41,6 +41,7 @@ docker compose up -d --build
 # перший запуск: довантаження моделей у volume (кілька хвилин), потім:
 curl http://localhost:8002/healthz
 # Web UI: http://localhost:8002/
+# логи першого запуску: docker compose logs -f holos-hybrid
 ```
 
 Ознака готовності: `{"status":"ok","engine":"hybrid-onnx-int8",...,"threads":12}`.
@@ -59,7 +60,7 @@ docker run -d --name holos-tts \
   morkon06/holostts-hybrid:main
 ```
 
-Теги: `main` — останній збір із гілки `main`; `latest` та версійні (`1.0.0`) — із git-тегів (`v1.0.0`).
+Теги: `latest` та версійні (`1.0.0`) — стабільні релізи; `main` — останній збір.
 
 Compose без збірки (замість `build: .`):
 
@@ -162,13 +163,6 @@ curl http://localhost:8002/v1/audio/speech \
         holos_cpu_int8.onnx ─► float32 wav ─► нормалізація ─► WAV 24 кГц
 ```
 
-Оптимізації, зроблені в цьому репозиторії (виміряно на Xeon E5-2650, 12 потоків):
-
-- `intra_op_num_threads = min(TTS_THREADS, 9)` — виміряно як найшвидше
-- `session.run(["audio"], ...)` — відкидання зайвого виходу `audio_lengths`
-- `lru_cache` на препроцесі частин + **prefetch** підготовки частини `i+1` під час генерації частини `i`
-- послідовна обробка частин (запити обслуговуються по черзі)
-
 ## Бенчмарки (Xeon E5-2650, 12 потоків, теплий стан)
 
 | Сценарій | Час |
@@ -180,27 +174,6 @@ curl http://localhost:8002/v1/audio/speech \
 Для порівняння: у парних A/B-замірах чистий PyTorch-бекенд (official HolosTTS)
 на тих самих текстах давав 5.3 с / 15.0 с — гібридний INT8-ONNX-шлях швидший на 27–35%.
 
-## Релізи
-
-Реліз створюється автоматично при push git-тегу у форматі `v*`:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-Це одночасно:
-
-- створює **GitHub Release** з автогенерованим описом змін;
-- публікує образ на Docker Hub із тегами `1.0.0` і `latest`.
-
-## Розробка і тестування
-
-```bash
-python -m py_compile app/*.py          # синтаксис (те саме робить CI)
-docker compose up -d --build           # збірка + запуск
-docker compose logs -f holos-hybrid     # логи (перший запуск качає моделі)
-```
 ## Home Assistant
 
 Сервіс — звичайний HTTP-сервер, тому його можна підʼєднати до Home Assistant кількома шляхами:
