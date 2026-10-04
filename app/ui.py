@@ -10,7 +10,7 @@ DISCLAIMER_MD = '---\n\n> ⚠️ **Відмова від відповідаль�
 
 def create_demo():
     voices = pipe.list_voices()
-    with gr.Blocks(title="HolosTTS hybrid (ONNX INT8 CPU)") as demo:
+    with gr.Blocks("HolosTTS hybrid (ONNX INT8 CPU)", delete_cache=(600, 1800)) as demo:
         gr.Markdown("# HolosTTS - український TTS (hybrid: ONNX Runtime INT8 + PyTorch-енкодер)")
         gr.Markdown(DISCLAIMER_MD)
 
