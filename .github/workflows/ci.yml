@@ -100,7 +100,7 @@ jobs:
           METADATA_JSON: ${{ steps.meta.outputs.json }}
         working-directory: /tmp/digests
         run: |
-          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$METADATA_JSON") $(printf 'morkon06/holostts-hybrid@sha256:%s ' $(cat *))
+          docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$METADATA_JSON") $(printf 'morkon06/holostts-hybrid@%s ' $(cat *))
       - name: Inspect image
         run: docker buildx imagetools inspect morkon06/holostts-hybrid:cpu
 
