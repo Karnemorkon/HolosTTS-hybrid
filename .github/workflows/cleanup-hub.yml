@@ -1,0 +1,35 @@
+name: Cleanup Docker Hub tags
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  delete-tags:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete obsolete Hub tags
+        env:
+          HUB_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, urllib.request
+          user = os.environ['HUB_USER']
+          tok = os.environ['HUB_TOKEN']
+          req = urllib.request.Request('https://hub.docker.com/v2/users/login/',
+              data=json.dumps({'username': user, 'password': tok}).encode(),
+              headers={'Content-Type': 'application/json'})
+          token = json.load(urllib.request.urlopen(req))['token']
+          for tag in ['1.0.0', '1.0.1', 'main', 'cuda-1.0.2', 'openvino-1.0.2']:
+              r = urllib.request.Request(
+                  'https://hub.docker.com/v2/repositories/%s/holostts-hybrid/tags/%s/' % (user, tag),
+                  method='DELETE', headers={'Authorization': 'Bearer ' + token})
+              try:
+                  urllib.request.urlopen(r)
+                  print('deleted', tag)
+              except Exception as e:
+                  print('FAIL', tag, e)
+          EOF
