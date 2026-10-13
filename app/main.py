@@ -1,13 +1,15 @@
 """FastAPI бекенд + Gradio UI на одному порту (8002)."""
 import base64
 import io
+import json
 import os
 import struct
 import tempfile
 
 import soundfile as sf
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.responses import Response, StreamingResponse
+from starlette.concurrency import iterate_in_threadpool
 from pydantic import BaseModel
 
 from app import tts_pipeline as pipe
@@ -24,6 +26,9 @@ class SynthRequest(BaseModel):
     voice: str | None = None          # ім'я пресету
     audio_base64: str | None = None   # аудіо у base64 для клонування голосу
     auto_verbalize: bool = True       # автоматично вербалізувати цифри/дати/час
+    speed: float = 1.0                # швидкість синтезу (0.25-4.0)
+    format: str = "wav"               # wav | mp3 | ogg
+    raw_stress: bool = False          # пропустити автонаголос (свої +/U+0301)
 
 
 class VerbalizeRequest(BaseModel):
@@ -38,12 +43,13 @@ def healthz():
         "provider": ",".join(pipe.session.get_providers()),
         "input_binding": pipe.INPUT_BINDING,
         "threads": pipe.THREADS,
+        "stress": pipe._STRESS_MODE,
     }
 
 
 @app.get("/api/voices")
 def voices():
-    return {"voices": pipe.list_voices()}
+    return {"voices": pipe.list_voices(), "custom": pipe.custom_voices()}
 
 
 @app.post("/api/verbalize")
@@ -67,14 +73,24 @@ def synthesize(req: SynthRequest):
                 voice = pipe.encode_voice(tmp_path)
             finally:
                 os.unlink(tmp_path)
+        if req.format not in ("wav", "mp3", "ogg"):
+            raise HTTPException(status_code=400, detail="format: підтримуються wav, mp3, ogg")
+        if not 0.25 <= req.speed <= 4.0:
+            raise HTTPException(status_code=400, detail="speed мусить бути в діапазоні 0.25-4.0")
         text = verbalizer.auto_verbalize(req.text) if req.auto_verbalize else req.text
-        sr, data = pipe.synthesize(text, voice)
-        buf = io.BytesIO()
-        sf.write(buf, data, sr, format="WAV")
+        sr, data = pipe.synthesize(text, voice, speed=req.speed, raw_stress=req.raw_stress)
+        audio = _export_bytes(req.format, sr, data)
         return {
+            "format": req.format,
             "sample_rate": sr,
-            "audio_base64": base64.b64encode(buf.getvalue()).decode(),
+            "duration_sec": round(len(data) / float(sr), 3),
+            "voice": voice if isinstance(voice, str) else "cloned",
+            "text": req.text,
+            "verbalized_text": text,
+            "audio_base64": base64.b64encode(audio).decode(),
         }
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -91,6 +107,7 @@ class OpenAISpeechRequest(BaseModel):
     response_format: str = "mp3"
     speed: float = 1.0
     stream: bool = False
+    raw_stress: bool = False
 
 
 def _pick_voice(name):
@@ -111,12 +128,28 @@ def _wav_bytes(sr, data):
     return buf.getvalue()
 
 
-def _mp3_bytes(sr, data):
+def _pydub_bytes(fmt, sr, data):
     from pydub import AudioSegment
     seg = AudioSegment(data.tobytes(), frame_rate=sr, sample_width=2, channels=1)
     buf = io.BytesIO()
-    seg.export(buf, format="mp3")
+    seg.export(buf, format=fmt)
     return buf.getvalue()
+
+
+def _mp3_bytes(sr, data):
+    return _pydub_bytes("mp3", sr, data)
+
+
+def _ogg_bytes(sr, data):
+    return _pydub_bytes("ogg", sr, data)
+
+
+def _export_bytes(fmt, sr, data):
+    if fmt == "wav":
+        return _wav_bytes(sr, data)
+    if fmt == "mp3":
+        return _mp3_bytes(sr, data)
+    return _ogg_bytes(sr, data)
 
 
 def _wav_header():
@@ -150,7 +183,7 @@ def openai_speech(req: OpenAISpeechRequest):
             raise HTTPException(status_code=400, detail="Текст мусить бути менше 50k символів")
 
         if not req.stream:
-            sr, data = pipe.synthesize(text, voice, speed=req.speed)
+            sr, data = pipe.synthesize(text, voice, speed=req.speed, raw_stress=req.raw_stress)
             if req.response_format == "wav":
                 return Response(content=_wav_bytes(sr, data), media_type="audio/wav")
             if req.response_format == "pcm":
@@ -160,7 +193,7 @@ def openai_speech(req: OpenAISpeechRequest):
         def _chunks():
             if req.response_format == "wav":
                 yield _wav_header()
-            for fchunk in pipe.synthesize_stream(text, voice, speed=req.speed):
+            for fchunk in pipe.synthesize_stream(text, voice, speed=req.speed, raw_stress=req.raw_stress):
                 pcm = pipe.float_to_pcm16(fchunk)
                 if req.response_format == "pcm":
                     yield pcm.tobytes()
@@ -181,6 +214,50 @@ def openai_speech(req: OpenAISpeechRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.websocket("/api/ws/synthesize")
+async def ws_synthesize(websocket: WebSocket):
+    # Потоковий синтез: JSON-конфіг від клієнта -> бінарні PCM16-чунки
+    # (24 kHz mono) -> фінальний JSON-кадр {done, sample_rate, duration_sec}.
+    await websocket.accept()
+    try:
+        cfg = json.loads(await websocket.receive_text())
+        text = (cfg.get("text") or "").strip()
+        if len(text) < 10:
+            raise ValueError("Текст закороткий (мінімум 10 символів)")
+        if len(text) > 50000:
+            raise ValueError("Текст мусить бути менше 50k символів")
+        speed = float(cfg.get("speed", 1.0))
+        if not 0.25 <= speed <= 4.0:
+            raise ValueError("speed мусить бути в діапазоні 0.25-4.0")
+        voice = _pick_voice(cfg.get("voice"))
+        if voice is None:
+            raise ValueError("Невідомий голос: %s" % cfg.get("voice"))
+        if cfg.get("auto_verbalize", True):
+            text = verbalizer.auto_verbalize(text)
+        raw_stress = bool(cfg.get("raw_stress", False))
+        gen = pipe.synthesize_stream(text, voice, speed=speed, raw_stress=raw_stress)
+        duration = 0.0
+        async for chunk in iterate_in_threadpool(gen):
+            pcm = pipe.float_to_pcm16(chunk)
+            duration += len(chunk) / float(pipe.SAMPLE_RATE)
+            await websocket.send_bytes(pcm.tobytes())
+        await websocket.send_text(json.dumps({
+            "done": True,
+            "sample_rate": pipe.SAMPLE_RATE,
+            "duration_sec": round(duration, 3),
+        }))
+    except Exception as e:
+        try:
+            await websocket.send_text(json.dumps({"error": str(e)}))
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 demo = ui.create_demo()

@@ -51,6 +51,48 @@ _INFER_LOCK = threading.Lock()
 
 _stressify = Stressifier()
 
+# Режим автоматичного наголошування: 'rule' (словниковий, швидший, ~0.5 с
+# на речення) або 'byt5' (нейромережевий patriotyk/stressifier-byt5-g2p-
+# ctranslate2: якісніший на рідкісних/власних назвах, але ~1.7 с на CPU).
+_STRESS_MODE = os.environ.get('HOLOS_STRESS', 'rule').strip().lower()
+if _STRESS_MODE not in ('rule', 'byt5'):
+    print('[hybrid] HOLOS_STRESS невідомий, використовую rule', flush=True)
+    _STRESS_MODE = 'rule'
+
+_byt5_instance = None
+_byt5_lock = threading.Lock()
+
+
+def _get_byt5():
+    # Ленива ініціалізація: модель ~1.2 ГБ качається у volume HF_HOME один раз.
+    global _byt5_instance
+    if _byt5_instance is None:
+        with _byt5_lock:
+            if _byt5_instance is None:
+                import ctranslate2
+                from ukrainian_stressifier_byt5_ct2 import UkrainianStressifier
+                _orig = ctranslate2.Translator
+
+                def _patched(*args, **kwargs):
+                    # Бібліотека не приймає параметри потоків - підміняємо конструктор.
+                    kwargs.setdefault('intra_threads', min(THREADS, 8))
+                    kwargs.setdefault('inter_threads', 1)
+                    return _orig(*args, **kwargs)
+
+                ctranslate2.Translator = _patched
+                try:
+                    _byt5_instance = UkrainianStressifier()
+                finally:
+                    ctranslate2.Translator = _orig
+                print('[hybrid] ByT5-стресифікатор готово', flush=True)
+    return _byt5_instance
+
+
+def _auto_stress(text):
+    if _STRESS_MODE == 'byt5':
+        return _get_byt5().apply_stress_marks(text)
+    return _stressify(text)
+
 
 # ----------------------------------------------------------------------------
 # 1. ЗАВАНТАЖЕННЯ АРТЕФАКТІВ (у спільний volume holos_models_cache:/app/models)
@@ -109,10 +151,23 @@ _ort_env = os.environ.get("ORT_INTRA_THREADS", "").strip()
 _sess_options.intra_op_num_threads = int(_ort_env) if _ort_env else min(THREADS, 9)
 _sess_options.inter_op_num_threads = 1
 _sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+# Вибір EP: ORT_PROVIDER=cpu|cuda|openvino|auto (auto пробує прискорення,
+# фільтрує за наявністю у цьому білді onnxruntime).
+_PROVIDER = os.environ.get("ORT_PROVIDER", "auto").strip().lower()
+_PROVIDERS_MAP = {
+    "cpu": ["CPUExecutionProvider"],
+    "cuda": ["CUDAExecutionProvider", "CPUExecutionProvider"],
+    "openvino": ["OpenVINOExecutionProvider", "CPUExecutionProvider"],
+    "auto": ["CUDAExecutionProvider", "OpenVINOExecutionProvider", "CPUExecutionProvider"],
+}
+_wanted = _PROVIDERS_MAP.get(_PROVIDER, _PROVIDERS_MAP["auto"])
+_available = ort.get_available_providers()
+_providers = [p for p in _wanted if p in _available] or ["CPUExecutionProvider"]
+print("[hybrid] ORT_PROVIDER=%s -> %s (наявні: %s)" % (_PROVIDER, _providers, _available), flush=True)
 session = ort.InferenceSession(
     _hf(ONNX_FILE),
     sess_options=_sess_options,
-    providers=["CPUExecutionProvider"],
+    providers=_providers,
 )
 
 
@@ -165,8 +220,61 @@ print("[hybrid] input binding:", INPUT_BINDING, flush=True)
 # ----------------------------------------------------------------------------
 # 3. ЕНКОДЕР ГОЛОСУ (PyTorch) -> numpy для ONNX
 # ----------------------------------------------------------------------------
+SPEAKERS_DIR = os.path.join(MODELS_DIR, 'speakers')
+_VOICE_ID_RE = re.compile(r'^[\w \-]{1,40}$', re.UNICODE)
+_saved_voices = {}
+
+
+def _load_saved_voices():
+    # Збережені клони з UI (volume speakers/*.npy) -> кеш _saved_voices.
+    if not os.path.isdir(SPEAKERS_DIR):
+        return
+    for fn in sorted(os.listdir(SPEAKERS_DIR)):
+        if fn.endswith('.npy'):
+            name = fn[:-4]
+            try:
+                arr = np.load(os.path.join(SPEAKERS_DIR, fn))
+                _saved_voices[name] = arr.astype(np.float32).reshape(-1)
+            except Exception as e:
+                print('[hybrid] пропущено пошкоджений голос %s: %s' % (name, e), flush=True)
+
+
+_load_saved_voices()
+
+
+def save_voice(name, emb):
+    # Зберігає ембеддінг [256] під ім'ям (викликає UI після прослуховування).
+    name = (name or '').strip()
+    if not _VOICE_ID_RE.match(name):
+        raise ValueError('Некоректна назва голосу: 1-40 символів (літери/цифри/пробіл/або _-)')
+    if name in voices:
+        raise ValueError('Назва збігається з пресетом: %s' % name)
+    arr = np.asarray(emb, dtype=np.float32).reshape(-1)
+    if arr.size != VOICE_DIM:
+        raise ValueError('Ембеддінг має бути розміром %d' % VOICE_DIM)
+    os.makedirs(SPEAKERS_DIR, exist_ok=True)
+    path = os.path.join(SPEAKERS_DIR, name + '.npy')
+    np.save(path, arr)
+    _saved_voices[name] = arr
+    print('[hybrid] голос збережено: %s' % path, flush=True)
+    return name
+
+
+def custom_voices():
+    # Рескан каталогу: .npy, покладені у volume, зʼявляються без рестарту.
+    if os.path.isdir(SPEAKERS_DIR):
+        for fn in sorted(os.listdir(SPEAKERS_DIR)):
+            if fn.endswith(".npy") and fn[:-4] not in _saved_voices:
+                try:
+                    arr = np.load(os.path.join(SPEAKERS_DIR, fn))
+                    _saved_voices[fn[:-4]] = arr.astype(np.float32).reshape(-1)
+                except Exception:
+                    pass
+    return sorted(_saved_voices.keys())
+
+
 def list_voices():
-    return list(voices.keys())
+    return list(voices.keys()) + custom_voices()
 
 
 def encode_voice(audio_path):
@@ -183,8 +291,15 @@ def _resolve_voice(voice):
     if isinstance(voice, torch.Tensor):
         return voice.cpu().numpy().astype(np.float32).reshape(1, VOICE_DIM)
     if isinstance(voice, str):
+        if voice in _saved_voices:
+            return _saved_voices[voice].reshape(1, VOICE_DIM)
         if voice not in voices:
-            raise ValueError("Невідомий пресет голосу: %s" % voice)
+            path = os.path.join(SPEAKERS_DIR, voice + ".npy")
+            if os.path.isfile(path):
+                arr = np.load(path).astype(np.float32).reshape(-1)
+                _saved_voices[voice] = arr
+                return arr.reshape(1, VOICE_DIM)
+            raise ValueError("Невідомий голос: %s" % voice)
         return voices[voice].cpu().numpy().astype(np.float32).reshape(1, VOICE_DIM)
     raise ValueError("Невідомий тип голосу: %s" % type(voice))
 
@@ -252,8 +367,8 @@ def _ensure_terminal_punct(text):
 
 
 @functools.lru_cache(maxsize=2048)
-def _prepare_part(part):
-    """Текст -> IPA-фонемна стрічка (результат кешується lru_cache)."""
+def _prepare_part(part, raw_stress=False):
+    # Кеш lru_cache; raw_stress=True пропускає автонаголос (власні +/U+0301).
     part = _strip_wrappers(part)
     if not part:
         return None
@@ -261,7 +376,9 @@ def _prepare_part(part):
     part = _standardize_dashes(part)
     part = _ensure_terminal_punct(part)
     part = part.replace(' - ', ': ')
-    return ipa(_stressify(part))
+    if raw_stress:
+        return ipa(part)
+    return ipa(_auto_stress(part))
 
 
 def _generate_part(phonemes, voice_arr, speed=1.0):
@@ -298,7 +415,7 @@ def _validate_text(text):
         raise ValueError("Текст мусить бути менше 50k символів")
 
 
-def synthesize_stream(text, voice, speed=1.0):
+def synthesize_stream(text, voice, speed=1.0, raw_stress=False):
     """Генератор синтезу: yield частини хвилі (float32) по мірі генерації.
 
     Використовується для потокового /v1/audio/speech. Блокування утримується
@@ -313,11 +430,11 @@ def synthesize_stream(text, voice, speed=1.0):
             # препроцес частини i+1 йде паралельно з генерацією частини i
             from concurrent.futures import ThreadPoolExecutor
             with ThreadPoolExecutor(max_workers=1) as pool:
-                pending = pool.submit(_prepare_part, parts[0])
+                pending = pool.submit(_prepare_part, parts[0], raw_stress)
                 for i, part in enumerate(parts):
                     phonemes = pending.result()
                     if i + 1 < len(parts):
-                        pending = pool.submit(_prepare_part, parts[i + 1])
+                        pending = pool.submit(_prepare_part, parts[i + 1], raw_stress)
                     if phonemes:
                         yield _generate_part(phonemes, voice_arr, speed)
 
@@ -334,13 +451,13 @@ def float_to_pcm16(chunk):
     return np.clip(chunk * 32767, -32768, 32767).astype(np.int16)
 
 
-def synthesize(text, voice, speed=1.0):
+def synthesize(text, voice, speed=1.0, raw_stress=False):
     """
     Синтез мови цілком.
       voice: str (пресет), np.ndarray або torch.Tensor (клонований ембеддінг).
       Повертає (SAMPLE_RATE, int16 numpy).
     """
-    chunks = list(synthesize_stream(text, voice, speed))
+    chunks = list(synthesize_stream(text, voice, speed, raw_stress))
     if not chunks:
         raise ValueError("Не вдалося отримати фонеми з тексту")
 

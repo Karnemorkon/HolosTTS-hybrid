@@ -9,6 +9,10 @@ services:
       - HF_HOME=/app/models
     # Ручний вибір потоків CPU (інакше авто: 80% від потоків хоста):
     #   - TTS_THREADS=6
+    # Режим наголошування: rule (типово, словниковий) | byt5 (ByT5-CT2, +1.2 ГБ).
+    #   - HOLOS_STRESS=byt5
+    # Провайдер ONNX Runtime: auto (типово) | cpu | openvino | cuda.
+    #   - ORT_PROVIDER=openvino
     volumes:
       - holos_models_cache:/app/models
     deploy:

@@ -5,7 +5,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends         ffmpeg 
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# ORT_VARIANT: cpu (default) | openvino | cuda - підміна onnxruntime-білду.
+ARG ORT_VARIANT=cpu
+RUN pip install --no-cache-dir -r requirements.txt && if [ "$ORT_VARIANT" = "openvino" ]; then pip uninstall -y onnxruntime && pip install --no-cache-dir onnxruntime-openvino==1.24.1; fi && if [ "$ORT_VARIANT" = "cuda" ]; then pip uninstall -y onnxruntime && pip install --no-cache-dir onnxruntime-gpu==1.31.0; fi
 
 COPY app/ ./app/
 

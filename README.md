@@ -25,6 +25,11 @@
 ## Можливості
 
 - **Синтез українською** 24 кГц з 27 пресетами голосів + клонування голосу з аудіо-промпта
+  (у Web UI клон можна зберегти під власним імʼям і використовувати через API)
+- **Формати** WAV/MP3/OGG у `/api/synthesize` та wav/pcm/mp3 у `/v1/audio/speech`
+- **Потоковий синтез**: REST-стрім (`stream=true`) і WebSocket `/api/ws/synthesize` (PCM16-чунки)
+- **Наголошування**: швидкий словниковий режим (`rule`, типово) або нейромережевий
+  ByT5-CTranslate2 (`HOLOS_STRESS=byt5` — якісніший на рідкісних словах, завантажує ~1.2 ГБ один раз)
 - **INT8 ONNX-генератор** (`holos_cpu_int8.onnx`) на ONNX Runtime — швидше за fp32 на CPU
 - **Автовербалізація**: `250 грн`, `22.08.2025 о 15:30` → «двісті пʼятдесят гривень…»
   (M2M100-CTranslate2, ліниве завантаження ~1.9 ГБ один раз на volume)
@@ -94,8 +99,11 @@ volumes:
 | `voice` | str | Імʼя пресету з `/api/voices` (типово — перший) |
 | `audio_base64` | str | WAV у base64 — клонування голосу замість пресету |
 | `auto_verbalize` | bool | Автовербалізація цифр/дат/часу (типово `true`) |
+| `format` | str | `wav` (типово), `mp3`, `ogg` |
+| `speed` | float | Швидкість синтезу 0.25–4.0 (типово 1.0) |
+| `raw_stress` | bool | `true` → без автонаголосу, власні `+`/U+0301 |
 
-Відповідь: `{"sample_rate": 24000, "audio_base64": "..."}` (WAV int16).
+Відповідь: `{"format","sample_rate","duration_sec","voice","text","verbalized_text","audio_base64"}`.
 
 ```bash
 curl -s http://localhost:8002/api/synthesize \
@@ -116,9 +124,13 @@ curl -s http://localhost:8002/api/verbalize \
 ### `GET /api/voices`, `GET /healthz`
 
 ```bash
-curl -s http://localhost:8002/api/voices      # {"voices":["Speaker_84",...]}
-curl -s http://localhost:8002/healthz         # статус, провайдер, потоки
+curl -s http://localhost:8002/api/voices      # `{"voices":[...],"custom":[...]}`
+curl -s http://localhost:8002/healthz         # статус, провайдер, потоки, режим наголосу
 ```
+
+**Збережені голоси.** Клонування — у Web UI: завантажте аудіо → прослухайте синтез →
+введіть імʼя і натисніть «Зберегти голос». Ембеддінг зберігається у volume
+`holos_models_cache` (`speakers/<імʼя>.npy`) і стає звичайним `voice` для REST/OpenAI API.
 ### `POST /v1/audio/speech` (OpenAI-сумісний)
 
 Формат [OpenAI Audio Speech API](https://platform.openai.com/docs/api-reference/audio/createSpeech) — працює з будь-яким клієнтом, що вміє підмінювати `base_url` (SillyTavern, OpenWebUI, LibreChat, HA-плагіни тощо):
@@ -141,6 +153,32 @@ curl http://localhost:8002/v1/audio/speech \
 Автентифікація не потрібна; поле `model` приймається і ігнорується.
 
 
+### `WS /api/ws/synthesize` (потоковий)
+
+Двосторонній WebSocket: перший кадр — JSON-конфіг від клієнта, далі — бінарні
+PCM16-чунки (24 кГц, mono), фінальний текстовий кадр — JSON-метадані
+(`{"done": true, "sample_rate": 24000, "duration_sec": ...}`).
+
+```python
+import asyncio, json, websockets
+
+async def main():
+    async with websockets.connect('ws://localhost:8002/api/ws/synthesize') as ws:
+        cfg = {'text': 'Привіт! Це потоковий синтез мови.', 'voice': 'Speaker_84'}
+        await ws.send(json.dumps(cfg))
+        with open('stream.pcm', 'wb') as f:
+            async for msg in ws:
+                if isinstance(msg, bytes):
+                    f.write(msg)
+                else:
+                    print(json.loads(msg))
+
+asyncio.run(main())
+```
+
+Конфіг: `text` (обовʼязково), `voice`, `speed`, `auto_verbalize`, `raw_stress`.
+Помилка сервера → текстовий кадр `{"error": "..."}`.
+
 ## Конфігурація
 
 | Змінна | Типово | Що робить |
@@ -148,6 +186,24 @@ curl http://localhost:8002/v1/audio/speech \
 | `TTS_THREADS` | `min(80% потоків хоста, cgroup-quota)` | PyTorch/препроцес |
 | `ORT_INTRA_THREADS` | `min(TTS_THREADS, 9)` | ONNX Runtime intra-op |
 | `HF_HOME` | `/app/models` | кеш моделей (volume `holos_models_cache`) |
+| `HOLOS_STRESS` | `rule` | Наголошування: `rule` (словниковий) або `byt5` (ByT5-CT2, +1.2 ГБ) |
+| `ORT_PROVIDER` | `auto` | EP ONNX Runtime: `cpu`, `cuda`, `openvino`, `auto` |
+
+### Варіанти збірки (теги образу)
+
+| Тег / `ORT_VARIANT` | EP | Для яких процесорів |
+|---|---|---|
+| `latest` / `cpu` (**дефолт**) | CPUExecutionProvider | **будь-які x86-64**, включно зі старими (перевірено на Xeon E5-2650, AVX без AVX2) |
+| `openvino` | OpenVINOExecutionProvider | **лише сучасні CPU з AVX512/VNNI** (~2024+); на старих процесорах один синтез займає >500 с — не використовувати |
+| `cuda` | CUDAExecutionProvider | GPU NVIDIA (потрібна NVIDIA-база та NVIDIA Container Toolkit) |
+| `embedded` (Етап 2) | CPU | single-board компʼютери (Raspberry Pi тощо) |
+
+`cpu`/`openvino`/`cuda` підміняє пакет onnxruntime:
+`docker build --build-arg ORT_VARIANT=openvino .`
+
+Примітка: `onnxruntime-openvino==1.24.1` — це **найновіша** версія на PyPI
+(EP-білди ONNX Runtime for OpenVINO виходять рідше за основний onnxruntime).
+Повільність на старих CPU зумовлена відсутністю інструкцій AVX512/VNNI, а не версією пакета.
 
 Приклади — у [`.env.example`](.env.example). Ліміти контейнера (`cpus: "12.0"`,
 `memory: 8g`) задані у `docker-compose.yml` — під ваш хост правте їх разом із
@@ -157,7 +213,7 @@ curl http://localhost:8002/v1/audio/speech \
 
 ```text
 текст ─ автовербалізація (M2M100-CTranslate2, ліниво) ─► текст із розгорнутими числами
-     ─ Stressifier (ukrainian-word-stress) ─► ipa-uk ─► CharTokenizer ─► tokens ┐
+     ─ наголос (ukrainian-word-stress / ByT5-CT2) ─► ipa-uk ─► CharTokenizer ─► tokens ┐
                                                                                ├─ ONNX Runtime
 аудіо ─ VoiceEncoder (PyTorch, voice_encoder.pt) ─► ембеддінг [256] ───────────┘
         holos_cpu_int8.onnx ─► float32 wav ─► нормалізація ─► WAV 24 кГц

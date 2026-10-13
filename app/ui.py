@@ -37,12 +37,37 @@ def create_demo():
                 )
             with gr.Column(scale=1):
                 output_audio = gr.Audio(label="Результат", type="numpy", autoplay=False)
+                with gr.Row():
+                    save_name = gr.Textbox(
+                        label="Імʼя нового голосу",
+                        max_lines=1,
+                        interactive=False,
+                        info="Доступно після клонування (завантажте аудіо вище)",
+                    )
+                    save_btn = gr.Button(
+                        "Зберегти голос",
+                        variant="secondary",
+                        interactive=False,
+                    )
+                save_status = gr.Markdown("Збереження голосу доступне лише після клонування.")
                 synth_btn = gr.Button("Синтезувати", variant="primary")
 
         def on_encode(path):
             if not path:
                 return None
             return pipe.encode_voice(path)
+
+        def on_audio_change(path):
+            # Клонування є → увімкнути збереження; немає → вимкнути.
+            if not path:
+                return None, gr.update(interactive=False), gr.update(interactive=False), "Збереження голосу доступне лише після клонування."
+            emb = pipe.encode_voice(path)
+            return (
+                emb,
+                gr.update(interactive=True),
+                gr.update(interactive=True),
+                "Клонування готове: вкажіть імʼя та натисніть «Зберегти голос».",
+            )
 
         def on_verbalize(text):
             return verbalizer.auto_verbalize(text or "")
@@ -54,7 +79,31 @@ def create_demo():
             sr, data = pipe.synthesize(text, voice)
             return sr, data
 
-        audio_prompt.change(on_encode, inputs=[audio_prompt], outputs=[custom_voice])
+        def on_save(name, emb):
+            if emb is None:
+                return gr.update(), "Збереження можливе лише після клонування."
+            exists = name in pipe.custom_voices()
+            try:
+                saved = pipe.save_voice(name, emb)
+            except ValueError as e:
+                return gr.update(), "Помилка: %s" % e
+            all_voices = pipe.list_voices()
+            note = " (перезаписано існуючий)" if exists else ""
+            return (
+                gr.update(choices=all_voices, value=saved),
+                "Голос збережено%s: %s (доступний у API за цим імʼям)." % (note, saved),
+            )
+
+        save_btn.click(
+            on_save,
+            inputs=[save_name, custom_voice],
+            outputs=[speaker, save_status],
+        )
+        audio_prompt.change(
+            on_audio_change,
+            inputs=[audio_prompt],
+            outputs=[custom_voice, save_name, save_btn, save_status],
+        )
         vb_btn.click(on_verbalize, inputs=[input_text], outputs=[input_text])
         synth_btn.click(
             on_synth,
