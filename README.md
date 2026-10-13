@@ -56,23 +56,23 @@ curl http://localhost:8002/healthz
 Образ: [`morkon06/holostts-hybrid`](https://hub.docker.com/r/morkon06/holostts-hybrid).
 
 ```bash
-docker pull morkon06/holostts-hybrid:main
+docker pull morkon06/holostts-hybrid:latest
 
 docker run -d --name holos-tts \
   -p 8002:8002 \
   -v holos_models_cache:/app/models \
   --restart unless-stopped \
-  morkon06/holostts-hybrid:main
+  morkon06/holostts-hybrid:latest
 ```
 
-Теги: `latest` та версійні (`1.0.0`) — стабільні релізи; `main` — останній збір.
+Теги (деталі — таблиця «Варіанти збірки» вище): `latest`/`cpu`/`embedded` — дефолт, multi-arch amd64+arm64; `cuda`, `openvino` — прискорення; версійні (`1.0.2`) — пін релізу.
 
 Compose без збірки (замість `build: .`):
 
 ```yaml
 services:
   holos-hybrid:
-    image: morkon06/holostts-hybrid:main
+    image: morkon06/holostts-hybrid:latest
     container_name: holos-hybrid
     ports:
       - "8002:8002"
