@@ -191,12 +191,11 @@ asyncio.run(main())
 
 ### Варіанти збірки (теги образу)
 
-| Тег / `ORT_VARIANT` | EP | Для яких процесорів |
-|---|---|---|
-| `latest` / `cpu` (**дефолт**) | CPUExecutionProvider | **будь-які x86-64**, включно зі старими (перевірено на Xeon E5-2650, AVX без AVX2) |
-| `openvino` | OpenVINOExecutionProvider | **лише сучасні CPU з AVX512/VNNI** (~2024+); на старих процесорах один синтез займає >500 с — не використовувати |
-| `cuda` | CUDAExecutionProvider | GPU NVIDIA (потрібна NVIDIA-база та NVIDIA Container Toolkit) |
-| `embedded` (Етап 2) | CPU | single-board компʼютери (Raspberry Pi тощо) |
+| Тег / `ORT_VARIANT` | Архітектури | EP | Для чого |
+|---|---|---|---|
+| `latest` / `cpu` / `embedded` (**дефолт**) | **linux/amd64 + linux/arm64** | CPUExecutionProvider | будь-які x86-64 (включно зі старими — перевірено на Xeon E5-2650, AVX без AVX2) та arm64-плати (Raspberry Pi 4/5, Ampere тощо). `embedded` — алиас `cpu` для зручності SBC-користувачів |
+| `openvino` | linux/amd64 | OpenVINOExecutionProvider | **лише сучасні x86-64 CPU з AVX512/VNNI** (~2024+); на старих процесорах один синтез займає >500 с — не використовувати |
+| `cuda` | linux/amd64 | CUDAExecutionProvider | GPU NVIDIA (потрібен NVIDIA Container Toolkit; база `nvidia/cuda:12.6.3`) |
 
 `cpu`/`openvino`/`cuda` підміняє пакет onnxruntime:
 `docker build --build-arg ORT_VARIANT=openvino .`
