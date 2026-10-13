@@ -13,6 +13,7 @@
 - Синтез 24 кГц українською, **27 пресетів голосів** + клонування з аудіо-промпта із **збереженням власного голосу** у Web UI (далі — звичайний `voice` для API)
 - **OpenAI-сумісний** `POST /v1/audio/speech` — `wav` / `pcm` / `mp3`, `speed`, `stream`
 - `POST /api/synthesize` — WAV/MP3/OGG, WebSocket-стрім `/api/ws/synthesize`, `GET /api/voices`, `POST /api/verbalize`, `GET /healthz`
+- **Home Assistant / Wyoming**: вбудований Wyoming-сервер (TCP 10200) для Assist-пайплайну (профіль `ha`)
 - Наголошування: швидке словникове (`rule`, типово) або нейромережеве ByT5 (`HOLOS_STRESS=byt5`)
 - Автопотоки CPU (80% хоста, до cgroup-квоти), healthcheck, ліміти ресурсів, ротація логів
 - Перший запуск довантажує моделі (~3.5 ГБ) у named volume — один раз
@@ -54,6 +55,7 @@ An independent wrapper around [patriotyk/HolosTTS](https://github.com/patriotyk/
 - 24 kHz synthesis, **27 voice presets** + cloning from an audio prompt with **saving your own voice** in the Web UI (then a regular `voice` for the API)
 - **OpenAI-compatible** `POST /v1/audio/speech` — `wav` / `pcm` / `mp3`, `speed`, `stream`
 - Native `POST /api/synthesize` (WAV/MP3/OGG), WebSocket streaming `/api/ws/synthesize`, `GET /api/voices`, `POST /api/verbalize`, `GET /healthz`
+- **Home Assistant / Wyoming**: built-in Wyoming server (TCP 10200) for the Assist pipeline (`ha` profile)
 - Stress modes: fast dictionary (`rule`, default) or neural ByT5 (`HOLOS_STRESS=byt5`)
 - Auto CPU threads (80% of host, clamped to cgroup quota), healthcheck, resource limits, log rotation
 - First start downloads models (~3.5 GB) into a named volume — once

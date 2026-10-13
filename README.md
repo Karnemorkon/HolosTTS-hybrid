@@ -28,6 +28,7 @@
   (у Web UI клон можна зберегти під власним імʼям і використовувати через API)
 - **Формати** WAV/MP3/OGG у `/api/synthesize` та wav/pcm/mp3 у `/v1/audio/speech`
 - **Потоковий синтез**: REST-стрім (`stream=true`) і WebSocket `/api/ws/synthesize` (PCM16-чунки)
+- **Home Assistant / Wyoming**: вбудований Wyoming-сервер (TCP 10200) — нативний TTS для Assist-пайплайну; вмикається профілем `ha`; для розпізнавання мови (STT) — офіційний `wyoming-whisper`
 - **Наголошування**: швидкий словниковий режим (`rule`, типово) або нейромережевий
   ByT5-CTranslate2 (`HOLOS_STRESS=byt5` — якісніший на рідкісних словах, завантажує ~1.2 ГБ один раз)
 - **INT8 ONNX-генератор** (`holos_cpu_int8.onnx`) на ONNX Runtime — швидше за fp32 на CPU
@@ -229,26 +230,42 @@ asyncio.run(main())
 Для порівняння: у парних A/B-замірах чистий PyTorch-бекенд (official HolosTTS)
 на тих самих текстах давав 5.3 с / 15.0 с — гібридний INT8-ONNX-шлях швидший на 27–35%.
 
-## Home Assistant
+## Home Assistant (Wyoming)
 
-Сервіс — звичайний HTTP-сервер, тому його можна підʼєднати до Home Assistant кількома шляхами:
+Вбудований **Wyoming-сервер** (TCP 10200) робить сервіс нативним TTS для Home Assistant Assist — без проміжних контейнерів і хмар. Це легкий проксі (~200 МБ, без моделей): він перенаправляє `describe`/`synthesize` на REST API `holos-hybrid`.
 
-| Шлях | Що дає |
-|---|---|
-| **Wyoming-адаптер** (рекомендовано) | міст Wyoming-протокол → `/api/synthesize`; HA (з 2023.5) має вбудовану TTS-платформу Wyoming з Assist-pipeline |
-| Кастомна TTS-інтеграція (`custom_components`) | прямий виклик REST API, повний контроль над entity |
-| `rest_command` в automations | прості оголошення без TTS-entity |
+### Запуск
 
-Деякі HA-плагіни, що працюють з OpenAI TTS API, підключаться безпосередньо до `/v1/audio/speech`.
+Адаптер вимкнений за замовчуванням (щоб користувачі, яким HA не потрібен, не тягнули зайвий контейнер). Увімкнення — профілем `ha`:
 
-Приклад `rest_command` у `configuration.yaml`:
+```bash
+docker compose --profile ha up -d
+# або окремо, якщо holos-hybrid уже працює:
+docker compose up -d holos-wyoming
+```
+
+### Додавання в Home Assistant
+
+1. **Settings → Devices & services → Add integration → Wyoming**
+2. Host: `holos-wyoming` (або IP хоста), Port: `10200`
+3. Після підключення сервіс зʼявиться як TTS-ентіті — оберіть його в pipeline Assist
+
+Голоси (27 пресетів + збережені кастомні) репортуються через `describe`; HA бачить їх як україномовні (`uk`). Невідомі імена голосів не ламають синтез (тихо падають на дефолтний).
+
+### Розпізнавання мови (STT)
+
+Для повного голосового циклу (STT + TTS) додайте окремий STT-контейнер — офіційний [wyoming-whisper](https://github.com/rhasspy/wyoming-whisper) з uk-моделлю. Wyoming-адаптер цього репозиторію відповідає лише за **синтез**.
+
+### Інші шляхи
+
+`rest_command` в automations або кастомні OpenAI-TTS-плагіни (через `/v1/audio/speech`):
 
 ```yaml
 rest_command:
   holos_tts:
-    url: "http://localhost:8002/api/synthesize"
+    url: 'http://localhost:8002/api/synthesize'
     method: POST
-    content_type: "application/json"
+    content_type: 'application/json'
     payload: '{"text": "{{ message }}", "auto_verbalize": true}'
 ```
 

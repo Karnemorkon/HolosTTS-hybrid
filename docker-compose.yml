@@ -34,6 +34,23 @@ services:
       start_period: 600s
     restart: unless-stopped
 
+  # Wyoming-адаптер для Home Assistant Assist (TTS). Легкий проксі без моделей.
+  # Увімкнення: docker compose --profile ha up -d  (порт 10200).
+  holos-wyoming:
+    build:
+      context: ./wyoming
+    image: morkon06/holostts-wyoming:latest
+    container_name: holos-wyoming
+    profiles: ["ha"]
+    ports:
+      - "10200:10200"
+    environment:
+      - HOLOS_URL=http://holos-hybrid:8002
+      - WYOMING_PORT=10200
+    depends_on:
+      - holos-hybrid
+    restart: unless-stopped
+
 volumes:
   holos_models_cache:
     name: holos_models_cache
