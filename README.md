@@ -33,7 +33,8 @@
   ByT5-CTranslate2 (`HOLOS_STRESS=byt5` — якісніший на рідкісних словах, завантажує ~1.2 ГБ один раз)
 - **INT8 ONNX-генератор** (`holos_cpu_int8.onnx`) на ONNX Runtime — швидше за fp32 на CPU
 - **Автовербалізація**: `250 грн`, `22.08.2025 о 15:30` → «двісті пʼятдесят гривень…»
-  (M2M100-CTranslate2, ліниве завантаження ~1.9 ГБ один раз на volume)
+  (M2M100-CTranslate2 int8 з [Morkon/holos-native-models](https://huggingface.co/Morkon/holos-native-models),
+  ліниве завантаження ~470 МБ один раз на volume)
 - **Автопотоки CPU**: 80% потоків хоста, обрізаних до cgroup-квоти (або `TTS_THREADS`)
 - **Нарізка на речення + LRU-кеш препроцесу + prefetch** наступної частини
 - **Продакшен-compose**: healthcheck, ліміти CPU/RAM, ротація логів, автоперезапуск
@@ -278,9 +279,12 @@ rest_command:
   [github.com/patriotyk/HolosTTS](https://github.com/patriotyk/HolosTTS) ·
   [huggingface.co/patriotyk/HolosTTS](https://huggingface.co/patriotyk/HolosTTS).
   Велика подяка за модель та препроцес-пайплайн!
+  Сервіс завантажує дзеркало ваг з
+  [Morkon/holos-native-models](https://huggingface.co/Morkon/holos-native-models) (той самий MIT-вміст).
 - **Вербалізація**: код адаптовано з MIT-space
   [patriotyk/styletts2-ukrainian](https://huggingface.co/spaces/patriotyk/styletts2-ukrainian)
-  (модель [skypro1111/m2m100-ukr-verbalization-ct2](https://huggingface.co/skypro1111/m2m100-ukr-verbalization-ct2)).
+  (модель-джерело [skypro1111/m2m100-ukr-verbalization-ct2](https://huggingface.co/skypro1111/m2m100-ukr-verbalization-ct2);
+  сервіс використовує int8-міграцію в [Morkon/holos-native-models](https://huggingface.co/Morkon/holos-native-models)).
 - **Залежності**: [ukrainian-word-stress](https://github.com/patriotyk/ukrainian-word-stress)
   (MIT, lang-uk) · [ipa-uk](https://github.com/patriotyk/ipa-uk) (MIT, lang-uk) ·
   [ukrainian-accentor](https://github.com/egorsmkv/ukrainian-accentor) · ONNX Runtime,

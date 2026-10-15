@@ -40,8 +40,9 @@ from ipa_uk import ipa
 from ukrainian_word_stress import Stressifier, StressSymbol
 from holos.models import VoiceEncoder
 
-MODEL_REPO = "patriotyk/HolosTTS"
-ONNX_FILE = "holos_cpu_int8.onnx"
+MODEL_REPO = "Morkon/holos-native-models"
+TTS_SUBFOLDER = "tts/"
+ONNX_FILE = TTS_SUBFOLDER + "holos_cpu_int8.onnx"
 SAMPLE_RATE = 24000
 VOICE_DIM = 256  # 128 acoustic + 128 prosodic (див. HolosTTS.encode)
 
@@ -103,18 +104,16 @@ def _hf(filename):
 
 def _ensure_vocab():
     """
-    Словник токенізації живе всередині holos.pt (ключ 'vocab') і є звичайним
-    списком символів. Один раз витягуємо його у vocab.json, щоб далі не
-    вантажити 542-мб holos.pt взагалі: holos.pt потрібен лише для видобутку
-    словника - качається рівно один раз у спільний volume.
+    Словник токенізації (184 символи) зберігається у repo як tts/vocab.json
+    (видобуто з оригінального holos.pt). Качається рівно один раз у спільний
+    volume; holos.pt (542 МБ) більше не потрібен.
     """
     vocab_path = os.path.join(MODELS_DIR, "vocab.json")
     if os.path.isfile(vocab_path):
         with open(vocab_path, encoding="utf-8") as f:
             return json.load(f)
-    params = torch.load(_hf("holos.pt"), map_location="cpu", weights_only=True)
-    raw = params["vocab"]
-    vocab = raw if isinstance(raw, list) else list(raw)
+    with open(_hf(TTS_SUBFOLDER + "vocab.json"), encoding="utf-8") as f:
+        vocab = json.load(f)
     os.makedirs(MODELS_DIR, exist_ok=True)
     with open(vocab_path, "w", encoding="utf-8") as f:
         json.dump(vocab, f, ensure_ascii=False)
@@ -140,10 +139,11 @@ class CharTokenizer:
 tokenizer = CharTokenizer(_ensure_vocab())
 
 # Офіційний енкодер голосу: клас VoiceEncoder + voice_encoder.pt з пакета holos.
-voice_encoder = VoiceEncoder(MODEL_REPO, device="cpu")
+# Приймає локальний шлях до ваг (repo вже містить їх у tts/).
+voice_encoder = VoiceEncoder(_hf(TTS_SUBFOLDER + "voice_encoder.pt"), device="cpu")
 
 # Пресети голосів - словник тензорів [256] з voices.pt (34 kB).
-voices = torch.load(_hf("voices.pt"), map_location="cpu", weights_only=True)
+voices = torch.load(_hf(TTS_SUBFOLDER + "voices.pt"), map_location="cpu", weights_only=True)
 
 # ONNX-генератор: квантована INT8 модель на CPUExecutionProvider.
 _sess_options = ort.SessionOptions()

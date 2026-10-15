@@ -1,23 +1,23 @@
 """Вербалізація цифр, дат і часу в текст перед синтезом (M2M100 + CTranslate2).
 
-Модель: skypro1111/m2m100-ukr-verbalization-ct2 (CTranslate2, int8),
-токенізатор: skypro1111/m2m100-ukr-verbalization.
+Модель: Morkon/holos-native-models, subfolder verbalizer/ct2-int8 (CTranslate2,
+int8); токенізатор: той самий repo, subfolder verbalizer/onnx-int8.
 Код адаптовано з авторського
 https://huggingface.co/spaces/patriotyk/styletts2-ukrainian (verbalizer.py).
 
 Відмінність від автора: усі речення обробляються ОДНИМ translate_batch
 (автор викликав по одному реченню - повільніше).
 
-Модель (~1.9 ГБ) завантажується ліниво при першому виклику у спільний
-volume HF_HOME (holos_models_cache) - качається рівно один раз.
+Модель (~470 МБ stored-int8) завантажується ліниво при першому виклику у
+спільний volume HF_HOME (holos_models_cache) - качається рівно один раз.
 """
 import re
 import threading
 
 from app.threads_config import resolve_threads
 
-MODEL_ID = "skypro1111/m2m100-ukr-verbalization-ct2"
-TOKENIZER_ID = "skypro1111/m2m100-ukr-verbalization"
+MODEL_ID = "Morkon/holos-native-models"
+TOKENIZER_ID = "Morkon/holos-native-models"
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 
@@ -37,17 +37,20 @@ class Verbalizer:
         from transformers import M2M100Tokenizer
 
         print("[verbalizer] завантаження моделі " + MODEL_ID + " ...", flush=True)
-        model_path = snapshot_download(
+        import os
+        root = snapshot_download(
             repo_id=MODEL_ID,
-            allow_patterns=["*.bin", "*.json", "tokenizer.json", "vocab.json"],
+            allow_patterns=["verbalizer/ct2-int8/*"],
         )
+        model_path = os.path.join(root, "verbalizer", "ct2-int8")
         self.translator = ctranslate2.Translator(
             model_path,
             device="cpu",
             compute_type="int8",
             intra_threads=resolve_threads(),
         )
-        self.tokenizer = M2M100Tokenizer.from_pretrained(TOKENIZER_ID)
+        self.tokenizer = M2M100Tokenizer.from_pretrained(
+            TOKENIZER_ID, subfolder="verbalizer/onnx-int8")
         self.tokenizer.src_lang = "uk"
         print("[verbalizer] готово", flush=True)
 
